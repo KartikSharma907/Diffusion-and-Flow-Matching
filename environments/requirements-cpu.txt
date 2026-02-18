@@ -1,0 +1,23 @@
+# CMU 10-799: Diffusion & Flow Matching
+# CPU-only PyTorch installation
+#
+# Use this for:
+#   - Local development on laptop (no GPU)
+#   - Testing code before running on Modal/cloud
+#   - macOS users
+#
+# Installation:
+#   pip install -r environments/requirements-cpu.txt
+
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
+
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+
+# Include base requirements
+-r requirements.txt
+
+# Modal CLI for cloud training
+modal>=0.63.0

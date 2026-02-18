@@ -1,0 +1,65 @@
+data:
+  dataset: "celeba"
+  root: /scr/kartiksh/Diffusion_flow_matching/data/celeba-subset
+  from_hub: false
+  repo_name: "electronickale/cmu-10799-celeba64-subset"
+  image_size: 64
+  channels: 3
+  num_workers: 4
+  pin_memory: true
+  augment: true
+
+model:
+  base_channels: 128
+  channel_mult: [1, 2, 2, 4]
+  num_res_blocks: 2
+  attention_resolutions: [16, 8]
+  num_heads: 4
+  dropout: 0.0
+  use_scale_shift_norm: true
+
+training:
+  batch_size: 32
+  learning_rate: 0.0002
+  weight_decay: 0.0000
+  betas: [0.9, 0.999]
+  ema_decay: 0.999
+  ema_start: 1000
+  gradient_clip_norm: 1.0
+  num_iterations: 150000  # Flow Map Matching may need more iterations than Flow Matching
+  log_every: 100
+  sample_every: 1000
+  save_every: 5000
+  num_samples: 32
+
+# Flow Map Matching specific config (Prop. 3.11 from paper)
+flow_map_matching:
+  num_timesteps: 1000           # Number of discretization steps for sampling
+  sigma_min: 0.0001             # Small value to avoid numerical issues at boundaries
+  annealing_schedule: "linear"  # Schedule for diagonal annealing: "linear", "cosine", or "none"
+  initial_gap: 0.1              # Initial maximum |t-s| during training (curriculum learning)
+  warmup_steps: 30000           # Steps to anneal from initial_gap to 1.0
+  reconstruction_weight: 0.5    # Weight for reconstruction term in Prop. 3.11 (w_{s,t} = 1)
+
+sampling:
+  num_steps: 20  # Sequential composition steps (can use fewer than training timesteps)
+  batch_size: 16
+
+infrastructure:
+  seed: 42
+  device: "cuda"
+  num_gpus: 2
+  mixed_precision: true  # Note: AMP + torch.func (vmap/jvp) can be unstable in some PyTorch versions
+                          # If you encounter NaN/inf losses, try setting this to false
+  compile_model: false
+
+checkpoint:
+  dir: "./checkpoints"
+  resume: null
+
+logging:
+  dir: "./logs"
+  wandb:
+    enabled: true
+    project: "cmu-10799-diffusion"
+    entity: null

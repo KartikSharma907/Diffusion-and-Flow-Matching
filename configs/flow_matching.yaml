@@ -1,0 +1,67 @@
+data:
+  dataset: "celeba"
+  root: /edrive2/kartiksh/ddpm_hw1/data/celeba-subset
+  from_hub: false
+  repo_name: "electronickale/cmu-10799-celeba64-subset"
+  image_size: 64
+  channels: 3
+  num_workers: 4
+  pin_memory: true
+  augment: true
+
+model:
+  base_channels: 128
+  channel_mult: [1, 2, 2, 4]
+  num_res_blocks: 2
+  attention_resolutions: [16, 8]
+  num_heads: 4
+  dropout: 0.1
+  use_scale_shift_norm: true
+
+training:
+  batch_size: 256
+  learning_rate: 0.0002
+  weight_decay: 0.0001
+  betas: [0.9, 0.999]
+  ema_decay: 0.9999
+  ema_start: 10000
+  gradient_clip_norm: 1.0
+  num_iterations: 80000
+  log_every: 100
+  sample_every: 1000
+  save_every: 5000
+  num_samples: 32
+
+# Flow Matching specific config
+flow_matching:
+  num_timesteps: 1000  # Number of discretization steps for sampling
+  sigma_min: 0.0001    # Small value to avoid numerical issues at t=0
+
+# Also include ddpm key for backward compatibility with from_config
+ddpm:
+  num_timesteps: 1000
+  beta_start: 0.0001
+  beta_end: 0.02
+
+sampling:
+  num_steps: 100  # Flow matching typically needs fewer steps than DDPM
+  sampler: "euler"  # ODE solver method: 'euler' or 'midpoint'
+  batch_size: 16
+
+infrastructure:
+  seed: 42
+  device: "cuda"
+  num_gpus: 1
+  mixed_precision: true
+  compile_model: false
+
+checkpoint:
+  dir: "./checkpoints"
+  resume: null
+
+logging:
+  dir: "./logs"
+  wandb:
+    enabled: true
+    project: "cmu-10799-diffusion"
+    entity: null

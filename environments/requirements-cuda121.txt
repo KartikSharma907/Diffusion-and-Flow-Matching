@@ -1,0 +1,23 @@
+# CMU 10-799: Diffusion & Flow Matching
+# PyTorch with CUDA 12.1
+#
+# Use this for:
+#   - Local GPU training with CUDA 12.x
+#   - Newer NVIDIA drivers (530+)
+#   - AWS EC2 Deep Learning AMIs
+#   - Most modern SLURM clusters
+#
+# Check your CUDA version: nvidia-smi (top right shows CUDA version)
+#
+# Installation:
+#   pip install -r environments/requirements-cuda121.txt
+
+--index-url https://download.pytorch.org/whl/cu121
+--extra-index-url https://pypi.org/simple
+
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+
+# Include base requirements
+-r requirements.txt

@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments (all variants)
+.venv/
+.venv-*/
+venv/
+ENV/
+env/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# PyTorch
+*.pt
+*.pth
+*.ckpt
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Data
+/data/
+datasets/
+*.npz
+*.npy
+
+# Logs and outputs
+logs/
+checkpoints/
+samples/
+wandb/
+*.log
+
+# FID stats
+fid_stats/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Modal
+.modal/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# AI files
+.claude/

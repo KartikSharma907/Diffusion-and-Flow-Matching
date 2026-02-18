@@ -1,0 +1,22 @@
+# CMU 10-799: Diffusion & Flow Matching
+# PyTorch with CUDA 12.9 (Latest)
+#
+# Use this for:
+#   - Local GPU training with the newest CUDA
+#   - Newest NVIDIA drivers
+#   - Hopper/Blackwell GPUs
+#
+# Check your CUDA version: nvidia-smi (top right shows CUDA version)
+#
+# Installation:
+#   pip install -r environments/requirements-cuda129.txt
+
+--index-url https://download.pytorch.org/whl/cu129
+--extra-index-url https://pypi.org/simple
+
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+
+# Include base requirements
+-r requirements.txt
