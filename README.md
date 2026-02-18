@@ -1,10 +1,6 @@
-# CMU 10799 Diffusion & Flow Matching Homework Starter Code
+# Diffusion & Flow Matching
 
-Welcome to CMU 10799 Spring 2026: Diffusion & Flow Matching!
-
-This repository contains your starter code for all four homework assignments. You'll build a working diffusion model from scratch, starting with DDPM fundamentals and progressing through flow matching to your chosen specialization track. The codebase is designed to grow with you, and what you implement in HW1 becomes the foundation for everything that follows.
-
-[Class Website](https://kellyyutonghe.github.io/10799S26/) | [Homework Handouts](https://kellyyutonghe.github.io/10799S26/homework/)
+Completed as part of course CMU 10799 Spring 2026: Diffusion & Flow Matching!
 
 ## Project Structure
 
@@ -58,27 +54,13 @@ cmu-10799-diffusion/
     └── DIRECTORY-STRUCTURE.md # Directory structure guide
 ```
 
-## List of TODOs
-
-1. src/data/celeba.py: fill in your data transforms functions
-2. src/methods/ddpm.py: implement everything in this file
-3. src/models/unet.py: implement the unet model architecture and its forward pass
-4. configs/: create your own model configs
-5. train.py: incorporate your sampling scheme to the training pipeline and save generated samples as images for logging
-6. sample.py: incorporate your sampling scheme to the training pipeline and save generated samples as images
-
-## Example scripts & Helper skeleton notebooks
-Besides the parts that you need to implement, the starter code also provides several example scripts & helper notebook skeleton to help you get started.
-
-The scripts are stored in scripts/ and the notebooks are stored in notebooks/. Feel free to use (or not use), add, delete or modify any and all parts of these scripts and notebooks.
-
 ## Quick Start
 
 ### 1. Setup Environment
 
 ```bash
 git clone <repo-url>
-cd cmu-10799-diffusion
+cd diffusion_flow_matching
 
 # Run setup script (auto-detects your GPU)
 ./setup-uv.sh                 # Using uv (faster)
@@ -257,8 +239,7 @@ All hyperparameters are controlled via config files. Edit `configs/ddpm*.yaml` t
 
 
 ## Authors
-
-Yutong (Kelly) He, with assistance from Claude Code and OpenAI Codex.
+Thanks for the skeleton of the repo: Yutong (Kelly) He, with assistance from Claude Code and OpenAI Codex.
 
 ## References
 
