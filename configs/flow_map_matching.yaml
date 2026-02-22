@@ -25,12 +25,14 @@ training:
   betas: [0.9, 0.999]
   ema_decay: 0.999
   ema_start: 1000
-  gradient_clip_norm: 1.0
-  num_iterations: 150000  # Flow Map Matching may need more iterations than Flow Matching
+  gradient_clip_norm: 0.5 # 1.0
+  num_iterations: 250000  # Flow Map Matching may need more iterations than Flow Matching
   log_every: 100
   sample_every: 1000
   save_every: 5000
   num_samples: 32
+  lr_drop_step: 30000   # same as warmup_steps
+  lr_drop_factor: 0.3
 
 # Flow Map Matching specific config (Prop. 3.11 from paper)
 flow_map_matching:
@@ -40,16 +42,24 @@ flow_map_matching:
   initial_gap: 0.1              # Initial maximum |t-s| during training (curriculum learning)
   warmup_steps: 30000           # Steps to anneal from initial_gap to 1.0
   reconstruction_weight: 0.5    # Weight for reconstruction term in Prop. 3.11 (w_{s,t} = 1)
+  # --- New extensions ---
+  semigroup_weight: 0.2         # Weight for semigroup consistency loss; 0.0 to disable
+  predict_x0: false              # true = pMF x̂ reparameterization; false = original v_θ prediction
+  clamp_x: false                # Whether to clamp x during sampling for stability (can be removed if not needed)
+  step_epsilon: 1.0e-3          # Denominator ε; sign-safe: forward=(t-s)+ε, backward=(t-s)-ε. Increase to 5e-3 if noisy.
+  sg_ramp_steps: 50000   # ramp semigroup after warmup
+  sg_min_seg: 0.05       # ignore tiny (t-s) or (u-t) segments for sg loss
+  sg_delay_steps: 20000 # delay semigroup loss for some steps after warmup to allow initial learning of v_θ
 
 sampling:
-  num_steps: 20  # Sequential composition steps (can use fewer than training timesteps)
+  num_steps: 50  # Sequential composition steps (can use fewer than training timesteps)
   batch_size: 16
 
 infrastructure:
   seed: 42
   device: "cuda"
   num_gpus: 2
-  mixed_precision: true  # Note: AMP + torch.func (vmap/jvp) can be unstable in some PyTorch versions
+  mixed_precision: false  # Note: AMP + torch.func (vmap/jvp) can be unstable in some PyTorch versions
                           # If you encounter NaN/inf losses, try setting this to false
   compile_model: false
 

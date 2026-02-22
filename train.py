@@ -291,10 +291,11 @@ def save_samples(
         samples = samples[:num_samples]
 
     # Convert from [-1,1] to [0,1] if appropriate
-    if samples.min() >= -1.0 and samples.max() <= 1.0:
-        images = unnormalize(samples)
-    else:
-        images = samples
+    # if samples.min() >= -1.0 and samples.max() <= 1.0:
+    #     images = unnormalize(samples)
+    # else:
+    #     images = samples
+    images = unnormalize(samples.clamp(-1, 1))
 
     images = images.detach().cpu().float()
 
@@ -591,6 +592,16 @@ def train(
         
         # Forward pass with mixed precision
         optimizer.zero_grad()
+        
+        warmup_steps = config.get("flow_map_matching", {}).get("warmup_steps", None)
+        lr_drop_factor = config.get("training", {}).get("lr_drop_factor", 0.3)  # default 0.3
+        lr_drop_step = config.get("training", {}).get("lr_drop_step", warmup_steps)
+
+        if lr_drop_step is not None and step == int(lr_drop_step):
+            for pg in optimizer.param_groups:
+                pg["lr"] *= float(lr_drop_factor)
+            if is_main_process:
+                print(f"[LR] Dropped LR by x{lr_drop_factor} at step={step}. New lr={optimizer.param_groups[0]['lr']:.3e}")
 
         # Note: FlowMapMatching handles AMP internally (disables only for JVP section)
         with autocast(device_type, enabled=config['infrastructure']['mixed_precision']):
