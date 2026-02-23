@@ -374,6 +374,73 @@ class FlowMapMatching(BaseMethod):
         return total_loss, loss_components
 
     # =========================================================================
+    # Sampling helpers
+    # =========================================================================
+
+    def _uniform_schedule(self, num_steps: int) -> torch.Tensor:
+        """Uniform time grid: linspace from sigma_min to 1-sigma_min."""
+        return torch.linspace(
+            self.sigma_min, 1.0 - self.sigma_min, num_steps + 1, device=self.device
+        )
+
+    def _karras_schedule(self, num_steps: int, rho: float = 7.0) -> torch.Tensor:
+        """
+        EDM/Karras-inspired time schedule that concentrates steps near t=0
+        (high-noise end), improving quality at fixed step count.
+
+        Formula (monotone, maps i/N linearly in t^(1/rho) space):
+            t_i = (t_min^(1/rho) + (i/N) * (t_max^(1/rho) - t_min^(1/rho)))^rho
+
+        rho > 1 concentrates steps near t_min (rho=7 matches EDM default).
+        rho = 1 degenerates to uniform linspace.
+        """
+        t_min = self.sigma_min
+        t_max = 1.0 - self.sigma_min
+        indices = torch.arange(num_steps + 1, dtype=torch.float64, device=self.device) / num_steps
+        ts = (t_min ** (1.0 / rho) + indices * (t_max ** (1.0 / rho) - t_min ** (1.0 / rho))) ** rho
+        return ts.float()
+
+    def _euler_step(
+        self, s: torch.Tensor, t: torch.Tensor, x: torch.Tensor
+    ) -> torch.Tensor:
+        """Euler step: x_{t} = x_s + (t-s) * v_θ(s, t, x_s)."""
+        return self.flow_map(s, t, x)
+
+    def _heun_step(
+        self, s: torch.Tensor, t: torch.Tensor, x: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Midpoint RK2 for flow map matching (2 NFE / step).
+
+        WHY NOT the classic Heun corrector v_θ(s,t,x_pred)?
+        -------------------------------------------------------
+        The classic ODE Heun corrector averages v_θ(s,t,x) and v_θ(s,t,x_pred)
+        where x_pred = x + Δ·v_θ(s,t,x).  In standard flow matching this works
+        because v_t(x) is an instantaneous velocity that accepts any plausible
+        state at time t.  In flow map matching, v_θ(s,t,·) is conditioned on its
+        input being a state at time s drawn from the interpolant; x_pred ≈ state
+        at time t is therefore out-of-distribution for the (s,t) conditioning,
+        producing an arbitrary and typically harmful correction.
+
+        Midpoint RK2 (correct for flow maps)
+        -------------------------------------------------------
+        Split [s, t] at the midpoint t_mid = (s+t)/2:
+
+            x_mid = X_{s,  t_mid}(x)     ← valid: x  is at time s
+            x_new = X_{t_mid, t}(x_mid)  ← valid: x_mid is at time t_mid
+
+        Both calls use (time_in, time_out, state_at_time_in) triples that are
+        within the model's training distribution.
+
+        Note: midpoint-RK2 with N steps is mathematically equivalent to Euler
+        with 2N uniform sub-steps, so it provides genuine quality improvement
+        for the same num_steps budget at the cost of 2× NFEs.
+        """
+        t_mid = (s + t) / 2.0
+        x_mid = self.flow_map(s, t_mid, x)    # x at s → x_mid at t_mid
+        return self.flow_map(t_mid, t, x_mid)  # x_mid at t_mid → x at t
+
+    # =========================================================================
     # Sampling via sequential composition
     # =========================================================================
 
@@ -383,6 +450,9 @@ class FlowMapMatching(BaseMethod):
         batch_size: int,
         image_shape: Tuple[int, int, int],
         num_steps: Optional[int] = None,
+        sampler: str = "heun",
+        schedule: str = "uniform",
+        rho: float = 3.0,
         **kwargs
     ) -> torch.Tensor:
         """
@@ -394,6 +464,16 @@ class FlowMapMatching(BaseMethod):
             batch_size: Number of samples
             image_shape: (C, H, W)
             num_steps: Number of steps (default: num_timesteps)
+            sampler: 'euler' (1 NFE/step) or 'heun' (midpoint-RK2, 2 NFE/step,
+                     equivalent to 2× Euler steps in quality)
+            schedule: 'uniform' (linspace, recommended default) or 'karras'
+                      (EDM-style non-uniform — only helpful at N>~10 where
+                      the step-size asymmetry doesn't produce a dominant
+                      single large step; use small rho ≤ 3)
+            rho: Exponent for Karras schedule.  rho=1 → uniform.
+                 For flow map matching rho=7 (EDM default) is harmful at low N
+                 because it creates a near-full-range terminal step.
+                 Prefer rho ≤ 3.  Ignored when schedule='uniform'.
 
         Returns:
             Generated samples
@@ -406,13 +486,22 @@ class FlowMapMatching(BaseMethod):
         if num_steps is None:
             num_steps = self.num_timesteps
 
-        # Use [sigma_min, 1-sigma_min] for consistency with training
-        ts = torch.linspace(self.sigma_min, 1.0 - self.sigma_min, num_steps + 1, device=self.device)
+        # Build time schedule
+        if schedule == "karras":
+            ts = self._karras_schedule(num_steps, rho=rho)
+        else:
+            ts = self._uniform_schedule(num_steps)
+
+        # Select step function
+        if sampler == "heun":
+            step_fn = self._heun_step
+        else:
+            step_fn = self._euler_step
 
         for i in range(num_steps):
             s = ts[i].expand(batch_size)
             t = ts[i + 1].expand(batch_size)
-            x = self.flow_map(s, t, x)
+            x = step_fn(s, t, x)
 
         return x
 

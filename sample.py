@@ -261,10 +261,24 @@ def main():
     # Sampling arguments
     parser.add_argument('--num_steps', type=int, default=None,
                        help='Number of sampling steps (default: from config)')
-    
+    parser.add_argument('--sampler', type=str, default='heun',
+                       choices=['euler', 'heun'],
+                       help='ODE sampler: euler (1 NFE/step) or heun (midpoint-RK2, '
+                            '2 NFE/step, equivalent to 2x Euler steps). Default: heun.')
+    parser.add_argument('--schedule', type=str, default='uniform',
+                       choices=['uniform', 'karras'],
+                       help='Time step schedule: uniform (linspace, recommended) or '
+                            'karras (EDM-style non-uniform; only useful at N>~10 with '
+                            'small rho). Default: uniform.')
+    parser.add_argument('--karras_rho', type=float, default=3.0,
+                       help='Exponent for Karras schedule (default: 3.0; rho=1 = uniform; '
+                            'avoid rho>4 at low step counts — creates a near-full-range '
+                            'terminal step that dominates the error).')
+
     # Other options
     parser.add_argument('--no_ema', action='store_true',
-                       help='Use training weights instead of EMA weights')
+                       help='Use training weights instead of EMA weights '
+                            '(ignored for flow_map_matching, which always uses EMA)')
     parser.add_argument('--device', type=str, default='cuda',
                        help='Device to use')
     parser.add_argument('--ddim_num_steps', type=int, default=100,
@@ -292,7 +306,11 @@ def main():
         raise ValueError(f"Unknown method: {args.method}. Supported: 'ddpm', 'ddim', 'flow_matching', 'flow_map_matching'.")
 
     # Apply EMA weights
-    if not args.no_ema:
+    # flow_map_matching always uses EMA (required for generation quality).
+    use_ema = (not args.no_ema) or (args.method == 'flow_map_matching')
+    if args.no_ema and args.method == 'flow_map_matching':
+        print("[Warning] --no_ema is ignored for flow_map_matching; EMA weights are always used.")
+    if use_ema:
         print("Using EMA weights")
         ema.apply_shadow()
     else:
@@ -331,6 +349,10 @@ def main():
                 num_steps=num_steps,
                 ddim_enabled=(args.method == 'ddim'),
                 eta=(args.ddim_eta if args.method == 'ddim' else 0.0),
+                # flow_map_matching-specific sampler options (ignored by other methods)
+                sampler=args.sampler,
+                schedule=args.schedule,
+                rho=args.karras_rho,
             )
 
             # Save individual images immediately or collect for grid
@@ -362,7 +384,7 @@ def main():
         print(f"Saved {args.num_samples} individual images to {args.output_dir}")
 
     # Restore EMA if applied
-    if not args.no_ema:
+    if use_ema:
         ema.restore()
 
 
