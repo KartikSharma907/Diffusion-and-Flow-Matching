@@ -19,7 +19,7 @@ model:
   use_scale_shift_norm: true
 
 training:
-  batch_size: 32
+  batch_size: 16
   learning_rate: 0.0002
   weight_decay: 0.0000
   betas: [0.9, 0.999]
@@ -43,7 +43,7 @@ flow_map_matching:
   warmup_steps: 30000           # Steps to anneal from initial_gap to 1.0
   reconstruction_weight: 0.5    # Weight for reconstruction term in Prop. 3.11 (w_{s,t} = 1)
   # --- New extensions ---
-  semigroup_weight: 0.2         # Weight for semigroup consistency loss; 0.0 to disable
+  semigroup_weight: 0.1         # Weight for semigroup consistency loss; 0.0 to disable
   predict_x0: false              # true = pMF x̂ reparameterization; false = original v_θ prediction
   clamp_x: false                # Whether to clamp x during sampling for stability (can be removed if not needed)
   step_epsilon: 1.0e-3          # Denominator ε; sign-safe: forward=(t-s)+ε, backward=(t-s)-ε. Increase to 5e-3 if noisy.
@@ -54,6 +54,7 @@ flow_map_matching:
 sampling:
   num_steps: 50  # Sequential composition steps (can use fewer than training timesteps)
   batch_size: 16
+  sampling_schedule: "uniform"  # Time grid for sampling: "uniform", "cosine" (more steps near t=0 and t=1)
 
 infrastructure:
   seed: 42

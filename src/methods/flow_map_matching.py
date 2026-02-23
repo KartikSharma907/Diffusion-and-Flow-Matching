@@ -193,7 +193,8 @@ class FlowMapMatching(BaseMethod):
         s: torch.Tensor,
         t: torch.Tensor,
         x: torch.Tensor,
-        clamp_x: bool = False
+        clamp_x: bool = False,
+        model_override: Optional[nn.Module] = None,
     ) -> torch.Tensor:
         """
         Compute flow map X_{s,t}(x).
@@ -214,11 +215,19 @@ class FlowMapMatching(BaseMethod):
             s: Source time (batch_size,)
             t: Target time (batch_size,)
             x: State (batch_size, C, H, W)
+            clamp_x: If True and predict_x0=True, clamps the raw x̂ prediction to [-1, 1]
+                     before computing u_θ. Used for stability during sampling.
+            model_override: If provided, use these weights instead of self.model.
+                            Handles DDP the same way as _func_model() (unwraps .module).
+                            Intended for EMA teacher evaluation in semigroup_loss.
 
         Returns:
             X_{s,t}(x): Transformed state
         """
-        m = self._func_model()
+        if model_override is not None:
+            m = model_override.module if hasattr(model_override, "module") else model_override
+        else:
+            m = self._func_model()
         raw = m(x, s, t)
         delta = (t - s).view(-1, 1, 1, 1)
 
@@ -311,7 +320,11 @@ class FlowMapMatching(BaseMethod):
         current_gap = self.get_time_gap(self._step.item())
         sigma = self.sigma_min
         max_gap = 1.0 - 2.0 * sigma
-        gap = min(current_gap, max_gap)
+        # Cap semigroup triples to local segments (max 0.25 total spread).
+        # Multi-step sampling composes small local hops, so enforcing
+        # composition on full-span triples is unnecessary and destabilizing.
+        sg_max_spread = 0.25
+        gap = min(current_gap, max_gap, sg_max_spread)
         min_delta_total = 2.0 * sigma   # need room for t strictly between s and u
 
         if gap <= min_delta_total:
@@ -645,7 +658,12 @@ class FlowMapMatching(BaseMethod):
                 x0_sg = x0[:B_sg]
                 x1_sg = x_1[:B_sg]
                 s3, t3, u3 = self.sample_time_triples(B_sg)
-                sg_loss, sg_dict = self.semigroup_loss(s3, t3, u3, x0_sg, x1_sg)
+
+                # Fix A: forward EMA model as teacher (None → falls back to student)
+                sg_loss, sg_dict = self.semigroup_loss(
+                    s3, t3, u3, x0_sg, x1_sg,
+                    teacher_model=kwargs.get("ema_model", None),
+                )
 
                 total_loss = total_loss + sg_w_eff * sg_loss
                 metrics.update(sg_dict)
@@ -707,7 +725,38 @@ class FlowMapMatching(BaseMethod):
     #         "semigroup_seg2_mean": float(seg2.mean().detach().item()),
     #     }
     
-    def semigroup_loss(self, s, t, u, x0, x1):
+    def semigroup_loss(
+        self,
+        s: torch.Tensor,
+        t: torch.Tensor,
+        u: torch.Tensor,
+        x0: torch.Tensor,
+        x1: torch.Tensor,
+        teacher_model: Optional[nn.Module] = None,
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
+        """
+        Semigroup (composition) consistency loss with four stabilizations:
+
+        Fix A — EMA teacher: X_{s,u} is evaluated with `teacher_model` weights
+            (slow-moving EMA) under no_grad, so the target is stable. The
+            two-step branch X_{t,u}(X_{s,t}) uses current student weights and
+            receives full gradients.
+
+        Fix B — delta normalization: residual is divided by the total segment
+            length (u-s) before squaring, so short and long jumps contribute
+            equally regardless of the raw magnitude of the composition error.
+
+        Fix C — Huber loss: smooth_l1_loss(beta=0.1) on the normalized residual
+            suppresses the quadratic blow-up from rare bad triples (outlier
+            semigroup pairs that have large transient errors early in training).
+
+        Args:
+            s, t, u: Time triples with 0 ≤ s < t < u ≤ 1, each (batch_size,)
+            x0: Noise samples (batch_size, C, H, W)
+            x1: Data samples (batch_size, C, H, W)
+            teacher_model: EMA model used as the teacher for the direct-jump
+                target X_{s,u}. Falls back to current model weights if None.
+        """
         I_s = self.interpolant_I_t(s, x0, x1)
 
         seg1 = (t - s).abs()
@@ -726,14 +775,32 @@ class FlowMapMatching(BaseMethod):
         I_s = I_s[mask]
         s = s[mask]; t = t[mask]; u = u[mask]
 
-        X_st = self.flow_map(s, t, I_s)
-        X_tu_Xst = self.flow_map(t, u, X_st)
+        # Run semigroup in fp32 for numerical safety (esp. if AMP is ever enabled).
+        device_type = I_s.device.type
+        with torch.amp.autocast(device_type=device_type, enabled=False):
+            I_s = I_s.float()
+            s = s.float(); t = t.float(); u = u.float()
 
-        # teacher target: stop-grad direct jump
-        with torch.no_grad():
-            X_su = self.flow_map(s, u, I_s)
+            # Fix 1 (critical): Detach X_st so gradients only flow through the
+            # second hop X_{t,u}. Without this, backprop chains through two
+            # composed flow_map calls and gradient magnitudes scale with
+            # (t-s)*(u-t), causing the spikes you observed.
+            with torch.no_grad():
+                X_st = self.flow_map(s, t, I_s)
+            X_tu_Xst = self.flow_map(t, u, X_st)
 
-        loss = F.mse_loss(X_tu_Xst, X_su)
+            # EMA teacher direct-jump target (no gradient, slow-moving weights)
+            with torch.no_grad():
+                X_su = self.flow_map(s, u, I_s, model_override=teacher_model)
+
+            # Normalize residual by total segment length for scale-consistency.
+            seg_eps = 1e-4
+            delta_su = (u - s).view(-1, 1, 1, 1)
+            resid_norm = (X_tu_Xst - X_su) / (delta_su + seg_eps)
+
+            # Huber loss on normalized residual — robust against outlier triples.
+            loss = F.smooth_l1_loss(resid_norm, torch.zeros_like(resid_norm), beta=0.1)
+
         return loss, {
             "semigroup_loss": float(loss.item()),
             "semigroup_keep_frac": float(mask.float().mean().item()),
@@ -830,6 +897,7 @@ class FlowMapMatching(BaseMethod):
         batch_size: int,
         image_shape: Tuple[int, int, int],
         num_steps: Optional[int] = None,
+        sampling_schedule: str = "uniform",
         **kwargs
     ) -> torch.Tensor:
         """
@@ -841,6 +909,11 @@ class FlowMapMatching(BaseMethod):
             batch_size: Number of samples
             image_shape: (C, H, W)
             num_steps: Number of steps (default: num_timesteps)
+            sampling_schedule: Time grid spacing.
+                - "uniform": evenly spaced (default)
+                - "cosine": (1 - cos(θ))/2 spacing, concentrates steps
+                  near t≈0 (noise) and t≈1 (data) where density changes
+                  fastest. Free quality improvement at low NFE.
 
         Returns:
             Generated samples
@@ -853,13 +926,22 @@ class FlowMapMatching(BaseMethod):
         if num_steps is None:
             num_steps = self.num_timesteps
 
-        # Use [sigma_min, 1-sigma_min] for consistency with training
-        ts = torch.linspace(self.sigma_min, 1.0 - self.sigma_min, num_steps + 1, device=self.device)
+        t_start = self.sigma_min
+        t_end = 1.0 - self.sigma_min
+
+        if sampling_schedule == "cosine":
+            # Cosine spacing: more steps near both endpoints.
+            # At low NFE (1-10 steps), this allocates resolution where
+            # the flow velocity changes most rapidly.
+            angles = torch.linspace(0, math.pi, num_steps + 1, device=self.device)
+            ts = t_start + (t_end - t_start) * (1.0 - torch.cos(angles)) / 2.0
+        else:  # "uniform"
+            ts = torch.linspace(t_start, t_end, num_steps + 1, device=self.device)
 
         for i in range(num_steps):
             s = ts[i].expand(batch_size)
             t = ts[i + 1].expand(batch_size)
-            x = self.flow_map(s, t, x, clamp_x=self.clamp_x)  # Optional clamping for stability during sampling
+            x = self.flow_map(s, t, x, clamp_x=self.clamp_x)
 
         return x
 

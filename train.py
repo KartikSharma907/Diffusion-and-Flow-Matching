@@ -23,6 +23,7 @@ Usage:
     python train.py --method ddpm --config configs/ddpm.yaml --resume checkpoints/ddpm_50000.pt\
 """
 
+import copy
 import os
 import sys
 import argparse
@@ -474,6 +475,21 @@ def train(
     # Create EMA from method.model (ensures all params are tracked)
     ema = EMA(unwrap_model(method.model), decay=config['training']['ema_decay'])
 
+    # Persistent EMA teacher for semigroup loss (FMM only).
+    # Allocated once here so we avoid a deepcopy every training step.
+    # Weights are refreshed from the EMA shadow inside the training loop,
+    # only when the semigroup schedule is actually active.
+    ema_teacher = None
+    if (
+        method_name == 'flow_map_matching'
+        and config.get('flow_map_matching', {}).get('semigroup_weight', 0.0) > 0.0
+    ):
+        ema_teacher = copy.deepcopy(unwrap_model(method.model)).eval()
+        for p in ema_teacher.parameters():
+            p.requires_grad_(False)
+        if is_main_process:
+            print("EMA teacher allocated for semigroup loss.")
+
     # Create gradient scaler for mixed precision
     # Determine device type for GradScaler (cuda or cpu)
     device_type = 'cuda' if device.type == 'cuda' else 'cpu'
@@ -603,9 +619,25 @@ def train(
             if is_main_process:
                 print(f"[LR] Dropped LR by x{lr_drop_factor} at step={step}. New lr={optimizer.param_groups[0]['lr']:.3e}")
 
+        # Refresh EMA teacher weights when the semigroup schedule is active.
+        # apply_shadow() swaps EMA params into method.model; we copy them into the
+        # frozen ema_teacher buffer, then restore() puts the student weights back.
+        # This happens entirely before compute_loss so gradients are unaffected.
+        ema_model_for_loss = None
+        if ema_teacher is not None and ema is not None:
+            fm_cfg = config.get("flow_map_matching", {})
+            sg_start = int(fm_cfg.get("warmup_steps", 0)) + int(fm_cfg.get("sg_delay_steps", 0))
+            if step >= sg_start:
+                ema.apply_shadow()
+                ema_teacher.load_state_dict(
+                    unwrap_model(method.model).state_dict(), strict=True
+                )
+                ema.restore()
+                ema_model_for_loss = ema_teacher
+
         # Note: FlowMapMatching handles AMP internally (disables only for JVP section)
         with autocast(device_type, enabled=config['infrastructure']['mixed_precision']):
-            loss, metrics = method.compute_loss(batch)
+            loss, metrics = method.compute_loss(batch, ema_model=ema_model_for_loss)
 
         # Backward pass
         scaler.scale(loss).backward()
